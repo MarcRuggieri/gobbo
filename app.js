@@ -537,6 +537,7 @@ class Gobbo {
   }
   vaiA(i, aMano = false) {
     this.indice = Math.max(0, Math.min(this.parole.length, i));
+    this.ultimoMovimento = performance.now();
     if (aMano) { this.base = this.indice; this.virgola = this.indice; }
     this.segna(Math.floor(this.indice));
     if (this.suFine && this.fine) this.suFine();
@@ -612,7 +613,11 @@ class Gobbo {
     };
     rec.onerror = (e) => {
       this.erroreVoce = e.error;
-      if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "language-not-supported") {
+      if (e.error !== "no-speech" && e.error !== "aborted") {
+        const ora = performance.now();
+        this.errori = (this.errori || []).filter((t) => ora - t < 15000).concat(ora);
+      }
+      if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "language-not-supported" || this.errori?.length >= 4) {
         this.voceRotta = true;
         this.suErroreVoce?.(e.error);
       }
@@ -798,7 +803,7 @@ function studio(v, parte = 0) {
   g.suErroreVoce = (err) => {
     if (P.modo !== "voce") return;
     P.modo = "velocita"; salvaPref(); g.cambiaModo("velocita"); disegnaComandi();
-    dici(err === "non supportato" ? "Questo browser non sa seguire la voce: il testo va a velocità fissa. Con Chrome segue la voce." : "Il riconoscimento della voce non è permesso: il testo va a velocità fissa.");
+    dici(err === "non supportato" ? "Questo browser non sa seguire la voce: il testo va a velocità fissa. Con Chrome segue la voce." : "Il riconoscimento della voce non funziona qui: il testo va a velocità fissa (+ e − per regolarla).");
   };
 
   const via = async (prova) => {
@@ -827,8 +832,11 @@ function studio(v, parte = 0) {
           silenzioDa = silenzioDa || performance.now();
           if (performance.now() - silenzioDa > 7000) dici("Non sento la tua voce: controlla il microfono. Se è tutto a posto, ignora questo messaggio.");
         } else silenzioDa = 0;
+        if (P.modo === "voce" && !g.pausa && !g.fine && S.livello > -42 && performance.now() - (g.ultimoMovimento || t0) > 9000)
+          dici("Il testo non ti segue? Premi «Velocità fissa»: andrà avanti da solo.");
       }, 250);
     } else stato.replaceChildren(h("span", { class: "prova" }, "PROVA"));
+    g.ultimoMovimento = performance.now();
     g.avvia();
     disegnaComandi();
     dici(consiglio());
