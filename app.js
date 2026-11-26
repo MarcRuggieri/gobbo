@@ -40,12 +40,12 @@ const DISPOSITIVO = (() => {
 })();
 
 // ---------------------------------------------------------------- preferenze
-const PREF_DEF = { modo: "voce", wpm: 150, font: DISPOSITIVO.telefono ? 26 : 46, inverti: false, larghezza: "medio", specchio: false, mostraMe: true, specchiaMe: true, autoStop: true, cam: "", mic: "" };
+const PREF_DEF = { modo: "voce", wpm: 150, font: DISPOSITIVO.telefono ? 26 : 46, inverti: false, larghezza: "medio", specchio: false, mostraMe: true, specchiaMe: true, autoStop: true, cam: "", mic: "", leggiDomanda: true };
 const P = Object.assign({}, PREF_DEF, JSON.parse(localStorage.getItem("gobbo.pref") || "{}"));
 const salvaPref = () => localStorage.setItem("gobbo.pref", JSON.stringify(P));
 
 // ---------------------------------------------------------------- stato
-const S = { persona: "alessio", dati: null, video: null, stream: null, audioCtx: null, analizzatore: null, livello: -100, wakeLock: null, pila: [] };
+const S = { persona: "alessio", dati: null, video: null, puntate: [], stream: null, audioCtx: null, analizzatore: null, livello: -100, wakeLock: null, pila: [] };
 
 // ---------------------------------------------------------------- testi (cifrati)
 async function caricaTesti() {
@@ -70,6 +70,7 @@ async function caricaTesti() {
     }
   } else dati.senzaChiave = true;
   dati.video = (dati.video || []).concat(miei);
+  S.puntate = podcastInVideo(dati.podcast);
   return dati;
 }
 
@@ -152,6 +153,7 @@ async function home() {
   fermaCamera();
   const d = S.dati;
   const riprese = await Archivio.tutte().catch(() => []);
+  if (S.puntate.length) return homePodcast(riprese);
   if ((d.senzaChiave || d.errore) && !d.video.length) {
     return pagina(h("main", { class: "carta" }, h("h1", {}, "Gobbo"), h("p", { class: "lead" }, d.errore ? "Non sono riuscito ad aprire i testi. Riapri il link di WhatsApp per intero, con tutto quello che c'è dopo il simbolo #." : "Per vedere i tuoi testi apri il link che ti hanno mandato su WhatsApp, con tutto quello che c'è dopo il simbolo #."), h("button", { class: "bottone secondario", onclick: () => vai(nuovoTesto) }, "Oppure incolla un testo tuo")));
   }
@@ -253,6 +255,227 @@ function nuovoTesto() {
     } }, "Salva il testo"))));
 }
 
+// ---------------------------------------------------------------- 2b. il podcast
+// Ogni puntata diventa un «video» con una parte per domanda: preparazione, riprese e archivio sono gli stessi dei testi.
+// Di ogni domanda la prima frase (gancio) resta com'è, in rosso; spunti e chiusura sono di chi parla e si correggono.
+function podcastInVideo(pod) {
+  if (!pod || !Array.isArray(pod.puntate)) return [];
+  return pod.puntate.map((p) => ({
+    id: p.id, podcast: true, numero: p.numero, titolo: `Puntata ${p.numero} · ${p.titolo}`, breve: p.titolo,
+    sottotitolo: p.sottotitolo || "", perche: p.perche || "", durata: p.durata || "",
+    parti: p.capitoli.map((c) => Object.assign({ spunti: [], chiusura: "" }, c)),
+  }));
+}
+const chiavePod = () => "gobbo.podcast." + S.persona;
+const modPod = () => JSON.parse(localStorage.getItem(chiavePod()) || "{}");
+function capitolo(v, i) {
+  const c = v.parti[i];
+  const m = modPod()[`${v.id}/${c.id}`];
+  return m ? Object.assign({}, c, { spunti: m.spunti, chiusura: m.chiusura, corretto: true }) : c;
+}
+function salvaCapitolo(v, i, spunti, chiusura) {
+  const c = v.parti[i];
+  const m = modPod();
+  if (JSON.stringify(spunti) === JSON.stringify(c.spunti) && chiusura === (c.chiusura || "")) delete m[`${v.id}/${c.id}`];
+  else m[`${v.id}/${c.id}`] = { spunti, chiusura };
+  localStorage.setItem(chiavePod(), JSON.stringify(m));
+}
+const ctaDi = (id) => (S.dati.podcast?.cta || []).find((c) => c.id === id);
+const etichettaCap = (v, i) => (v.parti[i].tipo === "apertura" ? "Apertura" : `Domanda ${v.parti.slice(0, i + 1).filter((c) => c.tipo !== "apertura").length}`);
+const quanteDomande = (v) => v.parti.filter((c) => c.tipo !== "apertura").length;
+
+function homePodcast(riprese) {
+  const d = S.dati, pod = d.podcast;
+  pagina(h("main", { class: "carta" },
+    h("p", { class: "occhiello" }, pod.occhiello || "Podcast · testi e registrazione"),
+    h("h1", {}, d.persona ? `Ciao ${d.persona}` : "Ciao"),
+    h("p", { class: "lead" }, pod.benvenuto || ""),
+    h("div", { class: "due-strade" },
+      h("button", { class: "strada", onclick: () => vai(leggiTutto) },
+        h("span", { class: "icona", "aria-hidden": "true" }, "📖"), h("b", {}, "Leggi e prepara"),
+        h("span", {}, "Le domande del podcast, la prima frase in rosso e i tuoi spunti. Puoi correggere tutto e scaricarlo in Word.")),
+      h("button", { class: "strada scura", onclick: () => vai(registraMenu) },
+        h("span", { class: "icona", "aria-hidden": "true" }, "🎙"), h("b", {}, "Registra da remoto"),
+        h("span", {}, "Se un giorno non puoi essere a Roma: la domanda compare sullo schermo, rispondi guardando in camera e la ripresa resta sul tuo computer."))),
+    h("div", { class: "barra-azioni" }, h("button", { class: "bottone secondario", onclick: () => vai(strategia) }, "La strategia in 2 minuti →")),
+    riprese.length ? h("div", { class: "piede" }, h("button", { class: "link", onclick: () => vai(rivedi, null) }, `Le tue riprese (${riprese.length})`)) : null));
+}
+
+function strategia() {
+  const st = S.dati.podcast.strategia || { titolo: "La strategia", sezioni: [] };
+  const tabella = (t) => h("div", { class: "tabella-scorri" }, h("table", { class: "tabella" },
+    h("thead", {}, h("tr", {}, t.colonne.map((c) => h("th", {}, c)))),
+    h("tbody", {}, t.righe.map((r) => h("tr", {}, r.map((c) => h("td", {}, c)))))));
+  pagina(h("main", { class: "carta lettura" }, indietro("Inizio"),
+    h("p", { class: "occhiello" }, "La strategia"),
+    h("h1", {}, st.titolo),
+    st.sezioni.map((s) => h("section", { class: "parte" },
+      h("h2", {}, s.titolo),
+      s.testo ? s.testo.split("\n").filter(Boolean).map((r) => h("p", {}, r)) : null,
+      s.punti ? h("ul", { class: "punti" }, s.punti.map((p) => h("li", {}, p))) : null,
+      s.tabella ? tabella(s.tabella) : null)),
+    h("div", { class: "barra-azioni" }, h("button", { class: "bottone oro", onclick: () => vai(leggiTutto) }, "Vai alle domande →"))));
+}
+
+const legenda = () => h("p", { class: "legenda" },
+  h("span", { class: "segno rosso" }, "Rosso"), " resta così: è quello che serve all'algoritmo. ",
+  h("span", { class: "segno nero" }, "Nero"), " sono spunti: li dici con parole tue e puoi cambiarli.");
+
+function leggiTutto() {
+  fermaCamera();
+  const pod = S.dati.podcast;
+  pagina(h("main", { class: "carta" }, indietro("Inizio"),
+    h("p", { class: "occhiello" }, "Leggi e prepara"),
+    h("h1", {}, pod.titolo),
+    pod.sottotitolo ? h("p", { class: "lead" }, pod.sottotitolo) : null,
+    legenda(),
+    h("div", { class: "schede" }, S.puntate.map((v) => h("article", { class: "scheda" },
+      h("h2", {}, v.titolo),
+      h("p", { class: "meta" }, [v.sottotitolo, `${quanteDomande(v)} domande`, v.durata].filter(Boolean).join(" · ")),
+      v.perche ? h("p", { class: "scopo" }, v.perche) : null,
+      h("div", { class: "azioni" },
+        h("button", { class: "bottone", onclick: () => vai(leggiPuntata, v) }, "Leggi le domande"),
+        h("button", { class: "bottone secondario", onclick: () => scaricaWord([v]) }, "Scarica in Word"))))),
+    h("div", { class: "barra-azioni" }, h("button", { class: "bottone oro", onclick: () => scaricaWord(S.puntate, true) }, "Scarica tutto in Word")),
+    S.dati.video.length ? h("section", { class: "come" },
+      h("h2", {}, "Gli altri testi"),
+      h("p", { class: "nota" }, "Questi si dicono come sono scritti, col gobbo che scorre e segue la voce."),
+      h("div", { class: "schede" }, S.dati.video.map((v) => h("article", { class: "scheda" },
+        h("h2", {}, v.titolo),
+        h("p", { class: "meta" }, [v.durata, v.scopo ? "obiettivo: " + v.scopo : ""].filter(Boolean).join(" · ")),
+        h("div", { class: "azioni" }, h("button", { class: "bottone", onclick: () => vai(leggi, v) }, "Leggi il testo")))))) : null));
+}
+
+function leggiPuntata(v, modifica = false) {
+  fermaCamera();
+  const blocchi = v.parti.map((_, i) => {
+    const c = capitolo(v, i);
+    const cta = ctaDi(c.cta);
+    const apertura = c.tipo === "apertura";
+    const testa = h("h3", {}, h("span", { class: "num" }, etichettaCap(v, i)), " ", c.titolo, c.corretto ? h("span", { class: "nota-parte oro" }, "corretto da te") : null);
+    const domanda = c.domanda ? h("p", { class: "domanda" }, h("span", { class: "chi" }, apertura ? "Marc" : "Marc ti chiede"), c.domanda) : null;
+    const rosso = h("div", { class: "pezzo rosso" }, h("span", { class: "chi" }, "🔒 ", apertura ? "Inizi così, resta così" : "La tua prima frase, resta così"), h("p", {}, c.gancio));
+    let corpo;
+    if (!modifica) {
+      corpo = [
+        c.spunti.length ? h("div", { class: "pezzo nero" }, h("span", { class: "chi" }, "Poi racconti, con parole tue"), h("ul", {}, c.spunti.map((s) => h("li", {}, s)))) : null,
+        c.chiusura ? h("div", { class: "pezzo nero" }, h("span", { class: "chi" }, "Per chiudere, se ti viene"), h("p", {}, c.chiusura)) : null,
+      ];
+    } else {
+      const adatta = (ta) => { const f = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + 4 + "px"; }; ta.addEventListener("input", f); requestAnimationFrame(f); return ta; };
+      corpo = [
+        h("label", { class: "chi" }, "Spunti, uno per riga"),
+        adatta(h("textarea", { "data-i": i, "data-campo": "spunti", rows: 4 }, c.spunti.join("\n"))),
+        h("label", { class: "chi" }, "Chiusura"),
+        adatta(h("textarea", { "data-i": i, "data-campo": "chiusura", rows: 2 }, c.chiusura || "")),
+        c.corretto ? h("button", { class: "link piccolo", onclick: () => { if (confirm("Rimettere gli spunti originali di questa domanda?")) { const o = v.parti[i]; salvaCapitolo(v, i, o.spunti, o.chiusura || ""); leggiPuntata(v, true); } } }, "Rimetti gli spunti originali") : null,
+      ];
+    }
+    return h("section", { class: "capitolo" + (apertura ? " apertura" : "") }, testa, domanda, rosso, corpo,
+      c.attenzione ? h("p", { class: "attenzione" }, h("b", {}, "Per i social: "), c.attenzione) : null,
+      cta ? h("p", { class: "cta-tag" }, "Nello short finisce con la frase finale ", h("b", {}, cta.nome), ": «", cta.testo, "»") : null,
+      c.fonte ? h("p", { class: "fonte" }, "Dal tuo libro: ", c.fonte) : null);
+  });
+  const salva = () => {
+    const per = {};
+    document.querySelectorAll("textarea[data-i]").forEach((ta) => { (per[ta.dataset.i] ||= {})[ta.dataset.campo] = ta.value.trim(); });
+    for (const [i, x] of Object.entries(per)) salvaCapitolo(v, +i, (x.spunti || "").split("\n").map((s) => s.trim()).filter(Boolean), x.chiusura || "");
+    leggiPuntata(v, false);
+    avviso("Salvato. Lo vedi anche quando registri.");
+  };
+  pagina(h("main", { class: "carta lettura" },
+    indietro("Tutte le puntate"),
+    h("p", { class: "occhiello" }, "Podcast"),
+    h("h1", {}, v.titolo),
+    h("p", { class: "meta" }, [v.sottotitolo, `${quanteDomande(v)} domande`, v.durata].filter(Boolean).join(" · ")),
+    v.perche ? h("p", { class: "lead" }, v.perche) : null,
+    legenda(),
+    h("div", { class: "barra-azioni" },
+      modifica
+        ? [h("button", { class: "bottone oro", onclick: salva }, "Salva le correzioni"), h("button", { class: "bottone secondario", onclick: () => leggiPuntata(v, false) }, "Annulla")]
+        : [h("button", { class: "bottone oro", onclick: () => vai(prepara, v) }, "Registra da remoto"),
+           h("button", { class: "bottone secondario", onclick: () => leggiPuntata(v, true) }, "Correggi gli spunti"),
+           h("button", { class: "bottone secondario", onclick: () => copiaPuntata(v) }, "Copia tutto"),
+           h("button", { class: "bottone secondario", onclick: () => scaricaWord([v]) }, "Scarica in Word")]),
+    modifica ? h("p", { class: "nota" }, "Scrivi nei riquadri: le parti in rosso non si cambiano qui. Le correzioni restano su questo dispositivo. Per farle avere a Marc: «Copia tutto» e incollalo su WhatsApp, oppure «Scarica in Word» e mandagli il file.") : null,
+    blocchi,
+    modifica ? h("div", { class: "barra-azioni" }, h("button", { class: "bottone oro", onclick: salva }, "Salva le correzioni")) : null));
+}
+
+function testoPuntata(v) {
+  return `${v.titolo}\n\n` + v.parti.map((_, i) => {
+    const c = capitolo(v, i);
+    const cta = ctaDi(c.cta);
+    return [`${etichettaCap(v, i)} · ${c.titolo}`, c.domanda ? `Marc: ${c.domanda}` : "", `PRIMA FRASE (resta così): ${c.gancio}`,
+      ...c.spunti.map((s) => `- ${s}`), c.chiusura ? `Chiusura: ${c.chiusura}` : "", cta ? `Frase finale ${cta.nome}` : ""].filter(Boolean).join("\n");
+  }).join("\n\n");
+}
+async function copiaPuntata(v) {
+  const testo = testoPuntata(v);
+  try { await navigator.clipboard.writeText(testo); }
+  catch { const ta = h("textarea", { class: "copia-a-mano", readonly: true }, testo); document.body.append(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
+  avviso("Copiato: ora puoi incollarlo su WhatsApp.");
+}
+
+// Word apre i file .doc scritti in HTML: rosso per le parti fisse, nero per gli spunti.
+function scaricaWord(lista, tutto = false) {
+  const pod = S.dati.podcast;
+  const e = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  let x = `<html><head><meta charset="utf-8"><title>${e(pod.titolo)}</title><style>body{font-family:Calibri,Arial,sans-serif;font-size:12pt;line-height:1.4}h1{font-size:20pt}h2{font-size:16pt;margin-top:22pt;border-bottom:1px solid #ccc}h3{font-size:13pt;margin:16pt 0 4pt}.r{color:#C00000;font-weight:bold}.d{font-style:italic;color:#333}.g{color:#777;font-size:10pt}</style></head><body>`;
+  x += `<h1>${e(pod.titolo)}</h1><p>In <span class="r">rosso</span> le frasi che restano così: servono all'algoritmo. In nero gli spunti: li dici con parole tue e qui puoi correggerli liberamente.</p>`;
+  for (const v of lista) {
+    x += `<h2>${e(v.titolo)}</h2>` + (v.perche ? `<p class="d">${e(v.perche)}</p>` : "");
+    v.parti.forEach((_, i) => {
+      const c = capitolo(v, i);
+      const cta = ctaDi(c.cta);
+      x += `<h3>${e(etichettaCap(v, i))} · ${e(c.titolo)}</h3>`;
+      if (c.domanda) x += `<p class="d">Marc: ${e(c.domanda)}</p>`;
+      x += `<p class="r">${e(c.gancio)}</p>`;
+      if (c.spunti.length) x += "<ul>" + c.spunti.map((s) => `<li>${e(s)}</li>`).join("") + "</ul>";
+      if (c.chiusura) x += `<p>Per chiudere: ${e(c.chiusura)}</p>`;
+      if (c.attenzione) x += `<p class="g">Per i social: ${e(c.attenzione)}</p>`;
+      if (cta) x += `<p class="r">Frase finale ${e(cta.nome)}: ${e(cta.testo)}</p>`;
+      if (c.fonte) x += `<p class="g">Dal tuo libro: ${e(c.fonte)}</p>`;
+    });
+  }
+  if (tutto && pod.cta?.length) {
+    x += "<h2>Le frasi finali (si registrano una volta sola, alla fine)</h2>";
+    for (const c of pod.cta) x += `<p class="r">${e(c.nome)}. ${e(c.testo)}</p><p class="g">${e(c.quando)}</p>`;
+  }
+  x += "</body></html>";
+  const nome = pulito(tutto ? `${S.dati.persona || ""} Podcast tutte le puntate` : `${S.dati.persona || ""} Podcast ${lista[0].titolo.split("·")[0]}`) + ".doc";
+  const a = h("a", { href: URL.createObjectURL(new Blob(["﻿", x], { type: "application/msword" })), download: nome });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 60000);
+  avviso("Scaricato: lo trovi nella cartella Download e si apre con Word.");
+}
+
+async function registraMenu() {
+  fermaCamera();
+  const riprese = await Archivio.tutte().catch(() => []);
+  const conta = (v) => riprese.filter((r) => r.video === v.id).length;
+  const scheda = (v, bottone, meta) => h("article", { class: "scheda" },
+    h("h2", {}, v.titolo),
+    h("p", { class: "meta" }, meta),
+    h("div", { class: "azioni" }, h("button", { class: "bottone oro", onclick: () => vai(prepara, v) }, bottone)),
+    conta(v) ? h("button", { class: "link", onclick: () => vai(rivedi, v) }, `Le tue riprese (${conta(v)}) →`) : null);
+  pagina(h("main", { class: "carta" }, indietro("Inizio"),
+    h("p", { class: "occhiello" }, "Registra da remoto"),
+    h("h1", {}, "Registra da dove sei"),
+    h("p", { class: "lead" }, "A Roma le domande te le faccio io. Se un giorno devi registrare da solo, funziona così:"),
+    h("ol", { class: "passi-rec" },
+      h("li", {}, h("b", {}, "Prepari la stanza e provi camera e microfono. "), "Ci vogliono due minuti, ti guido passo passo."),
+      h("li", {}, h("b", {}, "Compare la domanda, "), "e se vuoi te la legge una voce, come se te la facessi io."),
+      h("li", {}, h("b", {}, "Dici la prima frase in rosso, "), "poi racconti con parole tue seguendo gli spunti. Una barra ti dice quando ti avvicini al minuto."),
+      h("li", {}, h("b", {}, "Riguardi la risposta, "), "la tieni o la rifai, e passi alla domanda dopo. Alla fine scarichi le riprese con la ★ e me le mandi.")),
+    h("h2", { class: "sezione" }, "Il podcast"),
+    h("div", { class: "schede" }, S.puntate.map((v) => scheda(v, "Registra le risposte", `${quanteDomande(v)} domande · una alla volta, o tutta la puntata di fila`))),
+    S.dati.video.length ? [h("h2", { class: "sezione" }, "I testi col gobbo"),
+      h("div", { class: "schede" }, S.dati.video.map((v) => scheda(v, "Registra col gobbo", [v.durata, `${v.parti.length} ${v.parti.length === 1 ? "parte" : "parti"}`].filter(Boolean).join(" · "))))] : null,
+    h("p", { class: "nota" }, DISPOSITIVO.telefono ? "Funziona anche dal telefono: tienilo in orizzontale, fermo su un appoggio." : "Va meglio con Chrome sul Mac. Funziona anche con Safari e dal telefono, in orizzontale.")));
+}
+
 // ---------------------------------------------------------------- 3. preparazione passo passo
 function prepara(v, passo = 1) {
   S.video = v;
@@ -266,7 +489,9 @@ function prepara(v, passo = 1) {
         h("li", {}, h("b", {}, "Camera all'altezza degli occhi. "), DISPOSITIVO.telefono ? "Telefono in orizzontale, fermo su un appoggio, non in mano." : "Alza il Mac su qualche libro, così non riprende dal basso."),
         h("li", {}, h("b", {}, "A un braccio di distanza. "), "Si devono vedere la testa e le spalle, con un po' di spazio sopra."),
         h("li", {}, h("b", {}, "Silenzio. "), "Telefono in silenzioso, finestre chiuse, niente televisione."),
-        h("li", {}, h("b", {}, "Il testo sarà sotto la camera. "), "Leggi la riga gialla: così sembra che guardi chi ti ascolta.")),
+        v.podcast
+          ? h("li", {}, h("b", {}, "Niente da leggere. "), "Sotto la camera compaiono la domanda, la prima frase e tre spunti: guarda in camera e rispondi come al Symposium.")
+          : h("li", {}, h("b", {}, "Il testo sarà sotto la camera. "), "Leggi la riga gialla: così sembra che guardi chi ti ascolta.")),
       h("div", { class: "barra-azioni" }, h("button", { class: "bottone oro grande", onclick: () => prepara(v, 2) }, "Fatto, avanti"))));
   }
   if (passo === 2) {
@@ -740,6 +965,7 @@ const estensione = (mime) => (/mp4/.test(mime) ? "mp4" : "webm");
 
 // ---------------------------------------------------------------- 4. lo studio di registrazione
 function studio(v, parte = 0) {
+  if (v.podcast) return studioPodcast(v, parte);
   S.video = v;
   const tutto = parte === -1;
   const parti = tutto ? v.parti.map((p, i) => ({ titolo: `${i + 1} · ${p.titolo}`, testo: testoParte(v, i) })) : [{ testo: testoParte(v, parte) }];
@@ -917,6 +1143,245 @@ function studio(v, parte = 0) {
   }
 }
 
+// ---------------------------------------------------------------- 4b. lo studio del podcast
+// Al posto del testo che scorre: la domanda, la prima frase in rosso, gli spunti e una barra del tempo (60 s).
+class Scaletta {
+  constructor(box, v, parte) {
+    this.box = box;
+    this.v = v;
+    this.lista = parte === -1 ? v.parti.map((_, i) => i) : [parte];
+    this.k = 0;
+    this.t0 = 0;
+    this.pausa = false;
+    box.classList.add("scaletta-box");
+    this.disegna();
+  }
+  get i() { return this.lista[this.k]; }
+  get indice() { return this.k; }
+  get ultima() { return this.k >= this.lista.length - 1; }
+  disegna() {
+    const c = capitolo(this.v, this.i);
+    const tot = this.lista.length;
+    this.barra = h("div", { class: "tempo" }, h("i"));
+    this.orologio = h("span", { class: "tempo-num" });
+    this.box.replaceChildren(h("div", { class: "scaletta", style: `--font:${P.font}px` },
+      h("div", { class: "sc-testa" }, h("span", {}, etichettaCap(this.v, this.i) + (tot > 1 ? ` · ${this.k + 1} di ${tot}` : "")), this.orologio),
+      c.domanda ? h("p", { class: "sc-domanda" }, c.domanda) : null,
+      h("p", { class: "sc-gancio" }, c.gancio),
+      c.spunti.length ? h("ul", { class: "sc-spunti" }, c.spunti.map((s) => h("li", {}, s))) : null,
+      c.chiusura ? h("p", { class: "sc-chiusura" }, "Chiudi: ", c.chiusura) : null,
+      this.barra));
+  }
+  avvia() {
+    this.t0 = performance.now();
+    cancelAnimationFrame(this.raf);
+    const giro = () => {
+      const s = this.secondi();
+      this.barra.firstChild.style.width = Math.min(100, (s / 60) * 100) + "%";
+      this.barra.classList.toggle("quasi", s >= 45 && s < 60);
+      this.barra.classList.toggle("oltre", s >= 60);
+      this.orologio.textContent = mmss(s);
+      this.raf = requestAnimationFrame(giro);
+    };
+    giro();
+  }
+  secondi() { return this.t0 ? (performance.now() - this.t0) / 1000 : 0; }
+  ferma() { cancelAnimationFrame(this.raf); }
+  vai(d) {
+    const k = Math.max(0, Math.min(this.lista.length - 1, this.k + d));
+    if (k === this.k) return false;
+    this.k = k;
+    const correva = !!this.t0;
+    this.ferma();
+    this.disegna();
+    if (correva) this.avvia();
+    return true;
+  }
+  // stessi nomi del Gobbo, così posizionaGobbo ed esciDalloStudio funzionano uguale
+  scorriA() {}
+  applicaStile() { this.disegna(); }
+}
+
+function leggiAVoce(testo) {
+  return new Promise((ok) => {
+    if (!P.leggiDomanda || !testo || !window.speechSynthesis) return ok();
+    const u = new SpeechSynthesisUtterance(testo.replace(/[«»"]/g, ""));
+    u.lang = "it-IT";
+    const voce = speechSynthesis.getVoices().find((x) => /^it/i.test(x.lang));
+    if (voce) u.voice = voce;
+    u.rate = 0.95;
+    const fine = setTimeout(ok, 20000);
+    u.onend = u.onerror = () => { clearTimeout(fine); ok(); };
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  });
+}
+
+function studioPodcast(v, parte = 0) {
+  S.video = v;
+  const tutto = parte === -1;
+  const nomeParte = tutto ? "Tutta la puntata di fila" : `${etichettaCap(v, parte)} · ${v.parti[parte].titolo}`;
+  const anteprima = h("video", { class: "anteprima" + (P.specchiaMe ? " specchio" : "") + (P.mostraMe ? "" : " nascosta"), muted: true, playsinline: true, autoplay: true });
+  const box = h("div", { class: `gobbo-box largo-${P.larghezza}` });
+  const stato = h("div", { class: "stato" });
+  const titolo = h("div", { class: "titolo-parte" }, h("span", { class: "nome-video" }, v.titolo), h("b", {}, nomeParte));
+  const suggerimento = h("div", { class: "suggerimento" });
+  const comandi = h("div", { class: "comandi" });
+  const vista = h("div", { class: "studio" }, anteprima, box, h("div", { class: "barra-alta" }, titolo, stato), h("div", { class: "barra-bassa" }, suggerimento, comandi));
+  const app = $("#app");
+  app.className = "pieno";
+  app.replaceChildren(vista);
+  posizionaGobbo(box);
+  const sc = new Scaletta(box, v, parte);
+  S.gobbo = sc;
+  let rec = null, registrando = false, soloProva = false, t0 = 0, timer = 0, silenzioDa = 0, occupato = false;
+
+  const dici = (t) => { suggerimento.textContent = t; };
+  const bottone = (testo, cls, fn, titoloTasto) => h("button", { class: "tasto " + (cls || ""), onclick: fn, title: titoloTasto || "" }, testo);
+  const dopo = async (d) => {
+    if (occupato || !sc.vai(d)) return;
+    if (registrando || soloProva) {
+      occupato = true;
+      sc.ferma();
+      await leggiAVoce(capitolo(v, sc.i).domanda);
+      occupato = false;
+      if (!(registrando || soloProva)) return; // ha premuto Stop mentre la voce leggeva
+      sc.avvia();
+      disegnaComandi();
+    }
+  };
+  const disegnaComandi = () => {
+    if (registrando || soloProva) {
+      comandi.replaceChildren(
+        tutto ? h("div", { class: "gruppo" }, bottone("◀", "tondo", () => dopo(-1), "domanda prima"), bottone(sc.ultima ? "Ultima domanda" : "Domanda dopo →", "", () => dopo(1), "freccia destra")) : h("span"),
+        h("button", { class: "tasto-rec stop", onclick: () => stop(), title: "Invio" }, h("i"), registrando ? "Stop" : "Fine prova"),
+        h("span"));
+      return;
+    }
+    const nav = v.parti.length > 1 ? h("div", { class: "gruppo" },
+      bottone("◀", "tondo", () => parte > 0 && cambiaParte(parte - 1), "domanda prima"),
+      h("select", { class: "scegli-parte", onchange: (e) => cambiaParte(+e.target.value) },
+        v.parti.map((p, i) => h("option", { value: i, selected: i === parte }, `${etichettaCap(v, i)} · ${p.titolo}`)),
+        h("option", { value: -1, selected: tutto }, "Tutta la puntata di fila")),
+      bottone("▶", "tondo", () => parte >= 0 && parte < v.parti.length - 1 && cambiaParte(parte + 1), "domanda dopo")) : h("span");
+    comandi.replaceChildren(nav,
+      h("div", { class: "gruppo centro" },
+        h("button", { class: "tasto-rec", onclick: () => via(false), title: "Invio" }, h("i"), "Registra"),
+        bottone("Prova senza registrare", "", () => via(true))),
+      h("div", { class: "gruppo" },
+        bottone(P.leggiDomanda ? "🔊 Domanda a voce" : "🔈 Domanda muta", P.leggiDomanda ? "acceso-chiaro" : "", () => { P.leggiDomanda = !P.leggiDomanda; salvaPref(); disegnaComandi(); }, "una voce ti legge la domanda prima di partire"),
+        bottone("⚙", "tondo", () => impostazioni(), "impostazioni"),
+        bottone("✕", "tondo", () => history.back(), "esci")));
+  };
+  const cambiaParte = (p) => {
+    if (p >= v.parti.length || p < -1) return;
+    history.replaceState({ n: S.pila.length }, "");
+    S.pila[S.pila.length - 1] = [studio, [v, p]];
+    mostra(studio, [v, p]);
+  };
+
+  const via = async (prova) => {
+    if (registrando || soloProva || occupato) return;
+    try { await accendiCamera(); } catch (e) { dici(""); suggerimento.replaceChildren(spiegaErroreCamera(e)); return; }
+    anteprima.srcObject = S.stream;
+    if (!prova && !window.MediaRecorder) { dici("Questo browser non può registrare. Usa Chrome o Safari aggiornati."); return; }
+    occupato = true;
+    comandi.replaceChildren();
+    if (P.leggiDomanda) { dici("Ascolta la domanda…"); await leggiAVoce(capitolo(v, sc.i).domanda); }
+    dici(prova ? "Prova: niente viene registrato." : "Si parte fra 3 secondi. Guarda in camera.");
+    S.audioCtx?.resume?.();
+    await contoAllaRovescia(vista, 3);
+    occupato = false;
+    soloProva = prova;
+    if (!prova) {
+      rec = new Registratore(S.stream);
+      rec.avvia();
+      registrando = true;
+      t0 = performance.now();
+      silenzioDa = 0;
+      timer = setInterval(() => {
+        stato.replaceChildren(h("span", { class: "rec" }, h("i"), "REC " + mmss((performance.now() - t0) / 1000)));
+        if (S.audioCtx?.state === "running" && S.livello < -55) {
+          silenzioDa = silenzioDa || performance.now();
+          if (performance.now() - silenzioDa > 9000) dici("Non sento la tua voce: controlla il microfono. Se è tutto a posto, ignora questo messaggio.");
+        } else silenzioDa = 0;
+        if (sc.secondi() > 60) dici(tutto ? "Hai passato il minuto: chiudi con la tua frase, poi «Domanda dopo»." : "Hai passato il minuto: chiudi con la tua frase, poi Stop.");
+      }, 250);
+    } else stato.replaceChildren(h("span", { class: "prova" }, "PROVA"));
+    sc.avvia();
+    disegnaComandi();
+    dici(tutto
+      ? "Prima la frase in rosso, poi racconta. Finita una risposta, premi «Domanda dopo» (o la freccia destra)."
+      : "Prima la frase in rosso, poi racconta con parole tue. Sotto il minuto è perfetto. Finito, premi Stop (o Invio).");
+  };
+  const stop = async () => {
+    if (!(registrando || soloProva)) return;
+    clearInterval(timer);
+    sc.ferma();
+    window.speechSynthesis?.cancel();
+    stato.replaceChildren();
+    if (soloProva) { soloProva = false; sc.t0 = 0; disegnaComandi(); dici("Prova finita. Quando sei pronto premi Registra."); return; }
+    if (!registrando) return;
+    registrando = false;
+    dici("Salvo la ripresa…");
+    const r = await rec.ferma();
+    if (!r || !r.blob.size) { dici("La ripresa è vuota: riprova."); disegnaComandi(); return; }
+    const tutte = await Archivio.tutte();
+    const n = tutte.filter((x) => x.video === v.id && x.parte === parte).length + 1;
+    const ripresa = { id: "r" + Date.now(), persona: S.persona, video: v.id, parte, n, blob: r.blob, mime: r.mime, durata: r.durata, w: r.w, h: r.h, creata: Date.now(), scelta: false, letta: true };
+    try { await Archivio.metti(ripresa); }
+    catch (e) { dici("Non riesco a salvare la ripresa (spazio pieno?). La scarico subito."); scarica(ripresa, v); }
+    mostra(dopoRipresa, [v, ripresa]);
+    S.pila[S.pila.length - 1] = [studio, [v, parte]];
+  };
+
+  S.tasti = (e) => {
+    if (e.target.closest?.("select,input,textarea")) return;
+    if (e.key === "Enter") { e.preventDefault(); registrando || soloProva ? stop() : via(false); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); registrando || soloProva ? (tutto && dopo(1)) : parte >= 0 && cambiaParte(parte + 1); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); registrando || soloProva ? (tutto && dopo(-1)) : parte > 0 && cambiaParte(parte - 1); }
+    else if (e.key === "Escape" && !(registrando || soloProva)) history.back();
+  };
+  document.addEventListener("keydown", S.tasti);
+  S.riposiziona = () => posizionaGobbo(box);
+  window.addEventListener("resize", S.riposiziona);
+  screen.orientation?.addEventListener?.("change", S.riposiziona);
+  S.esciStudio = async () => { window.speechSynthesis?.cancel(); if (registrando) { registrando = false; await rec.ferma(); } sc.ferma(); clearInterval(timer); };
+
+  disegnaComandi();
+  dici(tutto
+    ? "Registri la puntata intera in una ripresa sola: le domande arrivano una dopo l'altra. Premi Registra (o Invio) quando sei pronto."
+    : "Leggi la domanda e i tre spunti. Quando sei pronto premi Registra (o Invio): non c'è niente da leggere, guarda in camera.");
+  window.speechSynthesis?.getVoices();
+  accendiCamera().then(() => {
+    anteprima.srcObject = S.stream;
+    anteprima.play().catch(() => {});
+    misuraLivello(null);
+  }).catch((e) => suggerimento.replaceChildren(spiegaErroreCamera(e)));
+  tieniAcceso();
+
+  function impostazioni() {
+    const riga = (etichetta, ctrl) => h("label", { class: "riga-imp" }, h("span", {}, etichetta), ctrl);
+    const spunta = (k, poi) => h("input", { type: "checkbox", checked: !!P[k], onchange: (e) => { P[k] = e.target.checked; salvaPref(); poi?.(); } });
+    const font = h("input", { type: "range", min: 22, max: 80, step: 2, value: P.font, oninput: (e) => { P.font = +e.target.value; salvaPref(); sc.applicaStile(); } });
+    const larg = h("select", { onchange: (e) => { P.larghezza = e.target.value; salvaPref(); box.className = box.className.replace(/largo-\S+/, "largo-" + P.larghezza); posizionaGobbo(box); } },
+      [["stretto", "Stretto (occhi più fermi)"], ["medio", "Medio"], ["largo", "Largo"]].map(([k, t]) => h("option", { value: k, selected: P.larghezza === k }, t)));
+    const pannello = h("div", { class: "pannello" },
+      h("h3", {}, "Impostazioni"),
+      riga("Grandezza del testo", font),
+      riga("Larghezza del riquadro", larg),
+      riga("La domanda letta da una voce", spunta("leggiDomanda", disegnaComandi)),
+      riga("Vedi la tua immagine", spunta("mostraMe", () => anteprima.classList.toggle("nascosta", !P.mostraMe))),
+      riga("Immagine a specchio", spunta("specchiaMe", () => anteprima.classList.toggle("specchio", P.specchiaMe))),
+      DISPOSITIVO.telefono ? riga("Riquadro dall'altro lato (se la camera è dall'altra parte)", spunta("inverti", () => posizionaGobbo(box))) : null,
+      h("p", { class: "nota" }, "Tasti: Invio registra e ferma · freccia destra e sinistra cambiano domanda."),
+      h("div", { class: "barra-azioni" },
+        document.fullscreenEnabled ? h("button", { class: "bottone secondario", onclick: () => { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {}); } }, "Schermo intero") : null,
+        h("button", { class: "bottone oro", onclick: () => { pannello.remove(); posizionaGobbo(box); } }, "Chiudi")));
+    vista.append(pannello);
+  }
+}
+
 // Il gobbo va vicino alla camera: in alto al centro sul Mac e col telefono in verticale,
 // sul lato della camera col telefono in orizzontale.
 function posizionaGobbo(box) {
@@ -947,7 +1412,7 @@ function esciDalloStudio() {
 function dopoRipresa(v, r) {
   const url = URL.createObjectURL(r.blob);
   const ultima = r.parte === -1 || r.parte >= v.parti.length - 1;
-  const nome = r.parte === -1 ? "Tutto il video" : v.parti.length > 1 ? `Parte ${r.parte + 1} · ${v.parti[r.parte].titolo}` : v.parti[r.parte].titolo;
+  const nome = r.parte === -1 ? (v.podcast ? "Tutta la puntata" : "Tutto il video") : v.podcast ? `${etichettaCap(v, r.parte)} · ${v.parti[r.parte].titolo}` : v.parti.length > 1 ? `Parte ${r.parte + 1} · ${v.parti[r.parte].titolo}` : v.parti[r.parte].titolo;
   const esito = h("p", { class: "nota" }, "Controllo l'audio…");
   pagina(h("main", { class: "carta" },
     h("p", { class: "occhiello" }, v.titolo),
@@ -963,8 +1428,8 @@ function dopoRipresa(v, r) {
         S.pila[S.pila.length - 1] = [studio, [v, r.parte + 1]];
         history.replaceState({ n: S.pila.length }, "");
         mostra(studio, [v, r.parte + 1]);
-      } }, ultima ? "Va bene, ho finito" : "Va bene, prossima parte →"),
-      h("button", { class: "bottone grande", onclick: () => { S.pila[S.pila.length - 1] = [studio, [v, r.parte]]; mostra(studio, [v, r.parte]); } }, "Rifai questa parte"),
+      } }, ultima ? "Va bene, ho finito" : v.podcast ? "Va bene, domanda dopo →" : "Va bene, prossima parte →"),
+      h("button", { class: "bottone grande", onclick: () => { S.pila[S.pila.length - 1] = [studio, [v, r.parte]]; mostra(studio, [v, r.parte]); } }, v.podcast ? "Rifai questa risposta" : "Rifai questa parte"),
       h("button", { class: "bottone secondario", onclick: () => scarica(r, v) }, "Scarica"))));
   if (r.durata < 120) audioNelFile(r.blob).then((ok) => {
     esito.className = ok === false ? "ko" : "ok";
@@ -992,7 +1457,7 @@ function scarica(r, v) {
 // ---------------------------------------------------------------- 6. tutte le riprese, e mandarle a Marc
 async function rivedi(soloVideo) {
   const tutte = await Archivio.tutte();
-  const video = S.dati.video.filter((v) => !soloVideo || v.id === soloVideo.id);
+  const video = S.puntate.concat(S.dati.video).filter((v) => !soloVideo || v.id === soloVideo.id);
   const sezioni = [];
   for (const v of video) {
     const sue = tutte.filter((r) => r.video === v.id);
@@ -1066,4 +1531,4 @@ function avviso(t) {
 })();
 
 // per le prove automatiche (non serve a chi usa la pagina)
-window.__gobbo = { trovaPosizione, paroleSentite, numeroInParole, normalizza };
+window.__gobbo = { trovaPosizione, paroleSentite, numeroInParole, normalizza, S };
