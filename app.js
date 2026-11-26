@@ -23,7 +23,7 @@ const h = (tag, attrs = {}, ...figli) => {
     else if (["muted", "checked", "selected", "disabled", "autoplay", "controls", "readonly"].includes(k)) { e[k === "readonly" ? "readOnly" : k] = !!v; e.setAttribute(k, ""); }
     else e.setAttribute(k, v === true ? "" : v);
   }
-  for (const f of figli.flat()) if (f !== null && f !== undefined && f !== false) e.append(f.nodeType ? f : document.createTextNode(String(f)));
+  for (const f of figli.flat(Infinity)) if (f !== null && f !== undefined && f !== false) e.append(f.nodeType ? f : document.createTextNode(String(f)));
   return e;
 };
 const b64u = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
@@ -261,7 +261,8 @@ function nuovoTesto() {
 function podcastInVideo(pod) {
   if (!pod || !Array.isArray(pod.puntate)) return [];
   return pod.puntate.map((p) => ({
-    id: p.id, podcast: true, numero: p.numero, titolo: `Puntata ${p.numero} · ${p.titolo}`, breve: p.titolo,
+    id: p.id, podcast: true, numero: p.numero, titolo: p.etichetta ? `${p.etichetta} · ${p.titolo}` : `Puntata ${p.numero} · ${p.titolo}`, breve: p.titolo,
+    sezione: p.sezione || "podcast", parola: p.parola || "Domanda",
     sottotitolo: p.sottotitolo || "", perche: p.perche || "", durata: p.durata || "",
     parti: p.capitoli.map((c) => Object.assign({ spunti: [], chiusura: "" }, c)),
   }));
@@ -281,8 +282,11 @@ function salvaCapitolo(v, i, spunti, chiusura) {
   localStorage.setItem(chiavePod(), JSON.stringify(m));
 }
 const ctaDi = (id) => (S.dati.podcast?.cta || []).find((c) => c.id === id);
-const etichettaCap = (v, i) => (v.parti[i].tipo === "apertura" ? "Apertura" : `Domanda ${v.parti.slice(0, i + 1).filter((c) => c.tipo !== "apertura").length}`);
+const etichettaCap = (v, i) => (v.parti[i].tipo === "apertura" ? "Apertura" : `${v.parola || "Domanda"} ${v.parti.slice(0, i + 1).filter((c) => c.tipo !== "apertura").length}`);
 const quanteDomande = (v) => v.parti.filter((c) => c.tipo !== "apertura").length;
+const contaParti = (v) => { const n = quanteDomande(v); return v.sezione === "podcast" ? `${n} domande` : v.parola === "Video" ? `${n} video` : `${n} ${n === 1 ? "parte" : "parti"}`; };
+const SEZIONI = [["podcast", "Il podcast", ""], ["riformula", "Da dire con parole tue", "I video della community e i video brevi dei corsi, nella versione da riformulare: prima frase in rosso, il resto spunti."]];
+const perSezione = (fn) => SEZIONI.map(([k, t, n]) => { const l = S.puntate.filter((v) => v.sezione === k); return l.length ? [h("h2", { class: "sezione" }, t), n ? h("p", { class: "nota" }, n) : null, h("div", { class: "schede" }, l.map(fn))] : null; });
 
 function homePodcast(riprese) {
   const d = S.dati, pod = d.podcast;
@@ -329,17 +333,17 @@ function leggiTutto() {
     h("h1", {}, pod.titolo),
     pod.sottotitolo ? h("p", { class: "lead" }, pod.sottotitolo) : null,
     legenda(),
-    h("div", { class: "schede" }, S.puntate.map((v) => h("article", { class: "scheda" },
+    perSezione((v) => h("article", { class: "scheda" },
       h("h2", {}, v.titolo),
-      h("p", { class: "meta" }, [v.sottotitolo, `${quanteDomande(v)} domande`, v.durata].filter(Boolean).join(" · ")),
+      h("p", { class: "meta" }, [v.sottotitolo, contaParti(v), v.durata].filter(Boolean).join(" · ")),
       v.perche ? h("p", { class: "scopo" }, v.perche) : null,
       h("div", { class: "azioni" },
-        h("button", { class: "bottone", onclick: () => vai(leggiPuntata, v) }, "Leggi le domande"),
-        h("button", { class: "bottone secondario", onclick: () => scaricaWord([v]) }, "Scarica in Word"))))),
+        h("button", { class: "bottone", onclick: () => vai(leggiPuntata, v) }, v.sezione === "podcast" ? "Leggi le domande" : "Leggi gli spunti"),
+        h("button", { class: "bottone secondario", onclick: () => scaricaWord([v]) }, "Scarica in Word")))),
     h("div", { class: "barra-azioni" }, h("button", { class: "bottone oro", onclick: () => scaricaWord(S.puntate, true) }, "Scarica tutto in Word")),
     S.dati.video.length ? h("section", { class: "come" },
-      h("h2", {}, "Gli altri testi"),
-      h("p", { class: "nota" }, "Questi si dicono come sono scritti, col gobbo che scorre e segue la voce."),
+      h("h2", {}, "Le versioni integrali"),
+      h("p", { class: "nota" }, "I testi completi, come sono stati scritti o registrati. Si dicono così, col gobbo che scorre e segue la voce."),
       h("div", { class: "schede" }, S.dati.video.map((v) => h("article", { class: "scheda" },
         h("h2", {}, v.titolo),
         h("p", { class: "meta" }, [v.durata, v.scopo ? "obiettivo: " + v.scopo : ""].filter(Boolean).join(" · ")),
@@ -353,7 +357,7 @@ function leggiPuntata(v, modifica = false) {
     const cta = ctaDi(c.cta);
     const apertura = c.tipo === "apertura";
     const testa = h("h3", {}, h("span", { class: "num" }, etichettaCap(v, i)), " ", c.titolo, c.corretto ? h("span", { class: "nota-parte oro" }, "corretto da te") : null);
-    const domanda = c.domanda ? h("p", { class: "domanda" }, h("span", { class: "chi" }, apertura ? "Marc" : "Marc ti chiede"), c.domanda) : null;
+    const domanda = c.domanda ? h("p", { class: "domanda" }, h("span", { class: "chi" }, apertura ? "Marc" : v.sezione === "podcast" ? "Marc ti chiede" : "Di cosa parli qui"), c.domanda) : null;
     const rosso = h("div", { class: "pezzo rosso" }, h("span", { class: "chi" }, "🔒 ", apertura ? "Inizi così, resta così" : "La tua prima frase, resta così"), h("p", {}, c.gancio));
     let corpo;
     if (!modifica) {
@@ -373,7 +377,7 @@ function leggiPuntata(v, modifica = false) {
     }
     return h("section", { class: "capitolo" + (apertura ? " apertura" : "") }, testa, domanda, rosso, corpo,
       c.attenzione ? h("p", { class: "attenzione" }, h("b", {}, "Per i social: "), c.attenzione) : null,
-      cta ? h("p", { class: "cta-tag" }, "Nello short finisce con la frase finale ", h("b", {}, cta.nome), ": «", cta.testo, "»") : null,
+      cta ? h("p", { class: "cta-tag" }, "Nel video finisce con la frase finale ", h("b", {}, cta.nome), ": «", cta.testo, "»") : null,
       c.fonte ? h("p", { class: "fonte" }, "Dal tuo libro: ", c.fonte) : null);
   });
   const salva = () => {
@@ -384,10 +388,10 @@ function leggiPuntata(v, modifica = false) {
     avviso("Salvato. Lo vedi anche quando registri.");
   };
   pagina(h("main", { class: "carta lettura" },
-    indietro("Tutte le puntate"),
-    h("p", { class: "occhiello" }, "Podcast"),
+    indietro("Tutti i testi"),
+    h("p", { class: "occhiello" }, v.sezione === "podcast" ? "Podcast" : "Da dire con parole tue"),
     h("h1", {}, v.titolo),
-    h("p", { class: "meta" }, [v.sottotitolo, `${quanteDomande(v)} domande`, v.durata].filter(Boolean).join(" · ")),
+    h("p", { class: "meta" }, [v.sottotitolo, contaParti(v), v.durata].filter(Boolean).join(" · ")),
     v.perche ? h("p", { class: "lead" }, v.perche) : null,
     legenda(),
     h("div", { class: "barra-azioni" },
@@ -469,9 +473,8 @@ async function registraMenu() {
       h("li", {}, h("b", {}, "Compare la domanda, "), "e se vuoi te la legge una voce, come se te la facessi io."),
       h("li", {}, h("b", {}, "Dici la prima frase in rosso, "), "poi racconti con parole tue seguendo gli spunti. Una barra ti dice quando ti avvicini al minuto."),
       h("li", {}, h("b", {}, "Riguardi la risposta, "), "la tieni o la rifai, e passi alla domanda dopo. Alla fine scarichi le riprese con la ★ e me le mandi.")),
-    h("h2", { class: "sezione" }, "Il podcast"),
-    h("div", { class: "schede" }, S.puntate.map((v) => scheda(v, "Registra le risposte", `${quanteDomande(v)} domande · una alla volta, o tutta la puntata di fila`))),
-    S.dati.video.length ? [h("h2", { class: "sezione" }, "I testi col gobbo"),
+    perSezione((v) => scheda(v, v.sezione === "podcast" ? "Registra le risposte" : "Registra con gli spunti", `${contaParti(v)} · una alla volta, o tutto di fila`)),
+    S.dati.video.length ? [h("h2", { class: "sezione" }, "Le versioni integrali, col gobbo"),
       h("div", { class: "schede" }, S.dati.video.map((v) => scheda(v, "Registra col gobbo", [v.durata, `${v.parti.length} ${v.parti.length === 1 ? "parte" : "parti"}`].filter(Boolean).join(" · "))))] : null,
     h("p", { class: "nota" }, DISPOSITIVO.telefono ? "Funziona anche dal telefono: tienilo in orizzontale, fermo su un appoggio." : "Va meglio con Chrome sul Mac. Funziona anche con Safari e dal telefono, in orizzontale.")));
 }
@@ -1220,7 +1223,7 @@ function leggiAVoce(testo) {
 function studioPodcast(v, parte = 0) {
   S.video = v;
   const tutto = parte === -1;
-  const nomeParte = tutto ? "Tutta la puntata di fila" : `${etichettaCap(v, parte)} · ${v.parti[parte].titolo}`;
+  const nomeParte = tutto ? (v.sezione === "podcast" ? "Tutta la puntata di fila" : "Tutto di fila") : `${etichettaCap(v, parte)} · ${v.parti[parte].titolo}`;
   const anteprima = h("video", { class: "anteprima" + (P.specchiaMe ? " specchio" : "") + (P.mostraMe ? "" : " nascosta"), muted: true, playsinline: true, autoplay: true });
   const box = h("div", { class: `gobbo-box largo-${P.larghezza}` });
   const stato = h("div", { class: "stato" });
@@ -1262,7 +1265,7 @@ function studioPodcast(v, parte = 0) {
       bottone("◀", "tondo", () => parte > 0 && cambiaParte(parte - 1), "domanda prima"),
       h("select", { class: "scegli-parte", onchange: (e) => cambiaParte(+e.target.value) },
         v.parti.map((p, i) => h("option", { value: i, selected: i === parte }, `${etichettaCap(v, i)} · ${p.titolo}`)),
-        h("option", { value: -1, selected: tutto }, "Tutta la puntata di fila")),
+        h("option", { value: -1, selected: tutto }, v.sezione === "podcast" ? "Tutta la puntata di fila" : "Tutto di fila")),
       bottone("▶", "tondo", () => parte >= 0 && parte < v.parti.length - 1 && cambiaParte(parte + 1), "domanda dopo")) : h("span");
     comandi.replaceChildren(nav,
       h("div", { class: "gruppo centro" },
@@ -1428,7 +1431,7 @@ function dopoRipresa(v, r) {
         S.pila[S.pila.length - 1] = [studio, [v, r.parte + 1]];
         history.replaceState({ n: S.pila.length }, "");
         mostra(studio, [v, r.parte + 1]);
-      } }, ultima ? "Va bene, ho finito" : v.podcast ? "Va bene, domanda dopo →" : "Va bene, prossima parte →"),
+      } }, ultima ? "Va bene, ho finito" : v.podcast && v.sezione === "podcast" ? "Va bene, domanda dopo →" : "Va bene, prossima parte →"),
       h("button", { class: "bottone grande", onclick: () => { S.pila[S.pila.length - 1] = [studio, [v, r.parte]]; mostra(studio, [v, r.parte]); } }, v.podcast ? "Rifai questa risposta" : "Rifai questa parte"),
       h("button", { class: "bottone secondario", onclick: () => scarica(r, v) }, "Scarica"))));
   if (r.durata < 120) audioNelFile(r.blob).then((ok) => {
